@@ -276,6 +276,14 @@ body {
   font-size: 0.65rem;
 }
 
+.copyright {
+  display: block;
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  opacity: 0.6;
+  margin-top: 2px;
+}
+
 /* ── Detail View ───────────────────────── */
 .detail-header {
   padding: 12px 16px;

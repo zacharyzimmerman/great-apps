@@ -105,6 +105,19 @@ const GreatApp = (() => {
     }
   }
 
+  // ── Copyright Footer ──────────────────────
+  function injectCopyright() {
+    const footer = document.querySelector('.list-footer') || document.querySelector('.editor-footer');
+    if (footer && !footer.querySelector('.copyright')) {
+      const el = document.createElement('span');
+      el.className = 'copyright';
+      el.textContent = '\u00A9 2026 Zachary Zimmerman';
+      footer.appendChild(el);
+    }
+  }
+
+  document.addEventListener('DOMContentLoaded', injectCopyright);
+
   // ── Public API ────────────────────────────
   return {
     $,
