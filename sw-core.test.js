@@ -124,13 +124,18 @@ function makeHarness(config = TAG_CONFIG) {
   };
 
   const listeners = {};
+  const postedMessages = [];
+  const fakeClients = [{ postMessage: (m) => postedMessages.push(m) }];
   const self = {
     location: new URL(BASE),
     addEventListener: (type, cb) => {
       listeners[type] = cb;
     },
     skipWaiting: () => Promise.resolve(),
-    clients: { claim: () => Promise.resolve() },
+    clients: {
+      claim: () => Promise.resolve(),
+      matchAll: () => Promise.resolve(fakeClients),
+    },
   };
 
   const ctx = { self, caches, fetch: mockFetch, Request: MockRequest, Response: MockResponse, URL, Promise, console };
@@ -157,7 +162,7 @@ function makeHarness(config = TAG_CONFIG) {
     await p;
   }
 
-  return { net, caches, storage, listeners, dispatchLifecycle, dispatchFetch, dispatchMessage, fetchCalls };
+  return { net, caches, storage, listeners, dispatchLifecycle, dispatchFetch, dispatchMessage, fetchCalls, postedMessages };
 }
 
 describe("GreatSW service-worker core", () => {
@@ -279,5 +284,56 @@ describe("GreatSW service-worker core", () => {
     h.net.online = false;
     const resp = await h.dispatchFetch(BASE, { mode: "navigate" });
     expect(resp.body).toBe("TROVE");
+  });
+
+  it("notifyUpdate messages clients with SW_UPDATED on activate", async () => {
+    const h = makeHarness({
+      version: "0.2.8",
+      cachePrefix: "great-trove",
+      shell: ["./", "./index.html"],
+      notifyUpdate: true,
+    });
+    await h.dispatchLifecycle("install");
+    await h.dispatchLifecycle("activate");
+    expect(h.postedMessages).toEqual([{ type: "SW_UPDATED" }]);
+  });
+
+  it("does not message clients when notifyUpdate is off", async () => {
+    const h = makeHarness({
+      version: "0.2.8",
+      cachePrefix: "great-trove",
+      shell: ["./", "./index.html"],
+    });
+    await h.dispatchLifecycle("install");
+    await h.dispatchLifecycle("activate");
+    expect(h.postedMessages).toEqual([]);
+  });
+
+  it("sub-path data bundle: shell-precached copy serves offline, then network-first refreshes", async () => {
+    const h = makeHarness({
+      version: "0.2.38",
+      cachePrefix: "great-tabs",
+      shell: ["./", "./index.html", "./tag-library/bundle.json"],
+      dataFiles: ["tag-library/bundle.json"],
+    });
+    h.net.bodies[BASE + "tag-library/bundle.json"] = "BUNDLE_V1";
+    // Install precaches the sub-path bundle under its full-path key.
+    await h.dispatchLifecycle("install");
+
+    // Offline before any data fetch — the shell-precached copy is still found.
+    h.net.online = false;
+    const offlineFirst = await h.dispatchFetch("tag-library/bundle.json", { mode: "cors" });
+    expect(offlineFirst).toBeTruthy();
+    expect(offlineFirst.body).toBe("BUNDLE_V1");
+
+    // Back online — network-first returns fresh and updates the cache.
+    h.net.online = true;
+    h.net.bodies[BASE + "tag-library/bundle.json"] = "BUNDLE_V2";
+    const online = await h.dispatchFetch("tag-library/bundle.json", { mode: "cors" });
+    expect(online.body).toBe("BUNDLE_V2");
+
+    h.net.online = false;
+    const offlineAgain = await h.dispatchFetch("tag-library/bundle.json", { mode: "cors" });
+    expect(offlineAgain.body).toBe("BUNDLE_V2");
   });
 });

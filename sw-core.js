@@ -20,6 +20,10 @@
     // filling the cache with dead entries.
     const dataFiles = config.dataFiles || [];
     const audio = config.audio || null; // { pathSegment, precache?: { bundleUrl, extract? } }
+    // When true, message all clients with {type:"SW_UPDATED"} after activating so
+    // they can reload onto the fresh version (apps opt in via their controllerchange
+    // handler / message listener).
+    const notifyUpdate = !!config.notifyUpdate;
 
     function putInCache(request, response) {
       return caches.open(CACHE).then((c) => c.put(request, response));
@@ -104,6 +108,12 @@
           .keys()
           .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
           .then(() => global.clients.claim())
+          .then(() => {
+            if (!notifyUpdate || !global.clients.matchAll) return;
+            return global.clients
+              .matchAll()
+              .then((cs) => cs.forEach((c) => c.postMessage({ type: "SW_UPDATED" })));
+          })
       );
     });
 
@@ -144,9 +154,11 @@
       }
 
       // 2. Data bundles — network-first online, cache fallback offline, stored
-      //    under a normalized key so ?t=<ts> cache-busters don't accumulate.
+      //    under a search-stripped full-path key so ?t=<ts> cache-busters don't
+      //    accumulate and sub-path bundles (e.g. tag-library/bundle.json) align
+      //    with their shell-precached copy.
       if (sameOrigin && isDataFile(url.pathname)) {
-        const key = new Request(url.pathname.split("/").pop());
+        const key = new Request(url.origin + url.pathname);
         e.respondWith(
           fetch(req)
             .then((resp) => {
