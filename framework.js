@@ -99,10 +99,116 @@ const GreatApp = (() => {
   }
 
   // ── Service Worker Registration ───────────
-  function registerSW(path = "sw.js") {
-    if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register(path);
+  // precacheAudio: once the worker is active, ask it to download every clip so
+  // all audio plays offline (the SW listens for the CACHE_AUDIO message).
+  function registerSW(path = "sw.js", { precacheAudio = false } = {}) {
+    if (!("serviceWorker" in navigator)) return;
+    navigator.serviceWorker.register(path).catch(() => {});
+    if (precacheAudio) {
+      navigator.serviceWorker.ready
+        .then((reg) => {
+          const sw = reg.active || navigator.serviceWorker.controller;
+          if (sw) sw.postMessage({ type: "CACHE_AUDIO" });
+        })
+        .catch(() => {});
     }
+  }
+
+  // ── PWA Zoom Suppression ──────────────────
+  // iOS Safari ignores `user-scalable=no`, so block its pinch/double-tap zoom
+  // gestures directly (CSS touch-action handles other browsers). Idempotent.
+  let zoomDisabled = false;
+  function disableZoom() {
+    if (zoomDisabled) return;
+    zoomDisabled = true;
+    for (const evt of ["gesturestart", "gesturechange", "gestureend"]) {
+      document.addEventListener(evt, (e) => e.preventDefault(), { passive: false });
+    }
+    // Pinch-zoom always involves more than one active touch point.
+    document.addEventListener(
+      "touchmove",
+      (e) => {
+        if (e.touches.length > 1) e.preventDefault();
+      },
+      { passive: false }
+    );
+    // Double-tap-to-zoom: suppress a second tap landing on roughly the same spot.
+    let last = { t: 0, x: 0, y: 0 };
+    document.addEventListener(
+      "touchend",
+      (e) => {
+        const touch = e.changedTouches[0];
+        const now = Date.now();
+        if (
+          touch &&
+          now - last.t <= 300 &&
+          Math.abs(touch.clientX - last.x) < 40 &&
+          Math.abs(touch.clientY - last.y) < 40
+        ) {
+          e.preventDefault();
+        }
+        last = touch ? { t: now, x: touch.clientX, y: touch.clientY } : { t: 0, x: 0, y: 0 };
+      },
+      { passive: false }
+    );
+  }
+
+  // ── Master/Detail Hash Router ─────────────
+  // Wires browser back/forward + a deep-link from the initial URL hash for the
+  // standard list↔detail apps. `onSelect` should be the no-history-push variant
+  // (the app pushes history itself when the user taps an item).
+  function initRouter({ stateKey, exists, onSelect, onRoot }) {
+    window.addEventListener("popstate", (e) => {
+      if (e.state && e.state[stateKey]) onSelect(e.state[stateKey]);
+      else onRoot();
+    });
+    if (window.location.hash) {
+      const id = window.location.hash.slice(1);
+      if (!exists || exists(id)) {
+        onSelect(id);
+        history.replaceState({ [stateKey]: id }, "", "#" + id);
+      }
+    }
+  }
+
+  // ── Detail Field Helper ───────────────────
+  // Show `el` with `prefix + value` when value is present, otherwise hide it
+  // (or its parent, for fields wrapped in a section).
+  function setField(el, value, { prefix = "", hideParent = false } = {}) {
+    if (!el) return;
+    const target = hideParent ? el.parentElement : el;
+    if (value || value === 0) {
+      el.textContent = prefix + value;
+      if (target) target.hidden = false;
+    } else if (target) {
+      target.hidden = true;
+    }
+  }
+
+  // ── Bundle Loading & Versioning ───────────
+  function setVersionLabel(version, sel = "#version-label") {
+    const el = $(sel);
+    if (el && version) el.textContent = `v${version}`;
+  }
+
+  // Append `?v=<version>` to each tag/song's audioUrl so a re-trimmed clip
+  // (same path) busts the browser cache. Mutates and returns the map.
+  function applyAudioVersion(items, version) {
+    if (!version || !items) return items;
+    for (const id in items) {
+      const it = items[id];
+      if (it && it.audioUrl && !it.audioUrl.includes("?")) it.audioUrl += `?v=${version}`;
+    }
+    return items;
+  }
+
+  // Fetch a content bundle fresh (no-store + cache-buster), optionally stamping
+  // the version label. Returns the parsed bundle.
+  async function loadBundle(url, { versionLabelSel } = {}) {
+    const resp = await fetch(`${url}?t=${Date.now()}`, { cache: "no-store" });
+    const bundle = await resp.json();
+    if (versionLabelSel) setVersionLabel(bundle.version, versionLabelSel);
+    return bundle;
   }
 
   // ── Copyright Footer ──────────────────────
@@ -130,6 +236,12 @@ const GreatApp = (() => {
     initKeyboard,
     createPlayButton,
     registerSW,
+    disableZoom,
+    initRouter,
+    setField,
+    setVersionLabel,
+    applyAudioVersion,
+    loadBundle,
     get listAudio() { return listAudio; },
     get listPlayingId() { return listPlayingId; },
   };
