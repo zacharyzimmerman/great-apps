@@ -103,7 +103,12 @@ const GreatApp = (() => {
   // all audio plays offline (the SW listens for the CACHE_AUDIO message).
   function registerSW(path = "sw.js", { precacheAudio = false } = {}) {
     if (!("serviceWorker" in navigator)) return;
-    navigator.serviceWorker.register(path).catch(() => {});
+    // updateViaCache:"none" forces the browser to bypass the HTTP cache when
+    // checking sw.js (and its importScripts) for updates. Without it a CDN/edge
+    // max-age on sw.js can pin a device to a stale worker — so a frozen worker
+    // keeps serving an old index.html (and old apple-touch-icon URL) for the
+    // life of that cache window, surviving cache-clears and reboots.
+    navigator.serviceWorker.register(path, { updateViaCache: "none" }).catch(() => {});
     if (precacheAudio) {
       navigator.serviceWorker.ready
         .then((reg) => {
